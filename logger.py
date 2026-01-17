@@ -1,10 +1,7 @@
 import logging
 
-logger = logging.getLogger('b2g')
-logger.setLevel(logging.INFO)
-handler = logging.FileHandler('b2g.log', mode='w')
-handler.setFormatter(logging.Formatter('%(levelname)s:%(name)s:%(message)s'))
-logger.addHandler(handler)
+logger = logging.getLogger(__name__)
 
 def logText(text):
+    logging.basicConfig(filename='shared/b2g.log', level=logging.INFO)
     logger.info(text)
