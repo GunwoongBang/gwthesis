@@ -1,7 +1,14 @@
 import logging
 
-logger = logging.getLogger(__name__)
+handler = logging.FileHandler('log/project.log', mode='w')
+handler.setFormatter(logging.Formatter('[%(levelname)s] %(message)s'))
 
-def logText(text):
-    logging.basicConfig(filename='shared/b2g.log', level=logging.INFO)
-    logger.info(text)
+_initialized_loggers = set()
+
+def logText(phase, text):
+    logger = logging.getLogger(phase)
+    if phase not in _initialized_loggers:
+        logger.setLevel(logging.INFO)
+        logger.addHandler(handler)
+        _initialized_loggers.add(phase)
+    logger.info(f"{phase}: {text}")
