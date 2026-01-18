@@ -1,15 +1,44 @@
+from neo4j import GraphDatabase
+import bim2graph
 import logger as logger
-import ifc_to_neo4j
+
+ARC_PATH = "ifc_models/BIMcollab/BIMcollab_ARC.ifc"
+
+NEO4J_URI = "neo4j://127.0.0.1:7687"
+NEO4J_USER = "neo4j"
+NEO4J_PASSWORD = "Bs13246578!"
+
+divider = "-" * 50
+
+
+def graph_initiate():
+    driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
+    logger.logText("PROJECT", "Neo4j driver initiated")
+    logger.logText("Divider", divider)
+    return driver
+
 
 if __name__ == "__main__":
     logger.logText("PROJECT", "Started")
-    #region: BIM2GRAPH 
-    ifc_to_neo4j.generate_graph() # Generate a BIM-derived graph from BIM models
-    #regionEnd
     
-    #region: SENSOR2GRAPH
-    #regionEnd
+    # Create driver once for all operations
+    driver = graph_initiate()
     
-    #region: GRAPH MERGING
-    #regionEnd
+    try:
+        # region: BIM2GRAPH
+        bim2graph.generate_graph(driver)  # Generate a BIM-derived graph from BIM models
+        # regionEnd
+
+        # region: SENSOR2GRAPH
+        # regionEnd
+
+        # region: GRAPH MERGING
+        # regionEnd
+        
+    finally:
+        # Ensure driver is always closed
+        driver.close()
+        logger.logText("Divider", divider)
+        logger.logText("PROJECT", "Neo4j driver closed")
+    
     logger.logText("PROJECT", "Ended")
