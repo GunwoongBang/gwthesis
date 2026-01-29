@@ -1,6 +1,63 @@
 import ifcopenshell
 import logger as logger
+import os
 
+# ============================================================================
+# Query Loader
+# ============================================================================
+
+
+class QueryManager:
+    """Loads and manages Cypher queries from external files."""
+
+    def __init__(self, query_file=None):
+        """Initialize the query manager by loading queries from a file."""
+        if query_file is None:
+            query_file = os.path.join(
+                os.path.dirname(__file__),
+                "query_handler",
+                "cypher4bim.cypher"
+            )
+        self.queries = self._load_queries(query_file)
+
+    def _load_queries(self, path):
+        """Parse a Cypher query file with -- name: labels."""
+        queries = {}
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                content = f.read()
+        except Exception as e:
+            logger.logText(
+                "BIM2GRAPH", f"Warning: Could not load queries from {path}: {e}")
+            return queries
+
+        current = None
+        buf = []
+        for line in content.splitlines():
+            if line.strip().startswith('-- name:'):
+                if current:
+                    queries[current] = '\n'.join(buf).strip()
+                current = line.split(':', 1)[1].strip()
+                buf = []
+            else:
+                buf.append(line)
+        if current:
+            queries[current] = '\n'.join(buf).strip()
+
+        return queries
+
+    def get(self, name):
+        """Get a query by name."""
+        return self.queries.get(name)
+
+
+# Global query manager instance
+_query_manager = QueryManager()
+
+
+# ============================================================================
+# IFC Data Extraction
+# ============================================================================
 
 def extract_spaces(model):
     """Extract all spaces from the IFC model"""
@@ -146,108 +203,85 @@ def extract_space_wall_edges(model):
     return edges
 
 
-# Neo4j database operations
+# ============================================================================
+# Neo4j Database Operations
+# ============================================================================
 
 def reset_database(tx):
     """Delete all nodes and relationships from the database"""
-    tx.run("MATCH (n) DETACH DELETE n")
+    q = _query_manager.get("RESET_DATABASE")
+    if q:
+        tx.run(q)
     logger.logText("BIM2GRAPH", "Database reset")
 
 
 def ensure_schema(tx):
     """Create unique constraints for all node types"""
-    tx.run("CREATE CONSTRAINT space_id IF NOT EXISTS FOR (s:Space) REQUIRE s.id IS UNIQUE")
-    tx.run("CREATE CONSTRAINT wall_id IF NOT EXISTS FOR (w:Wall) REQUIRE w.id IS UNIQUE")
-    tx.run("CREATE CONSTRAINT layer_id IF NOT EXISTS FOR (l:Layer) REQUIRE l.id IS UNIQUE")
+    for query_name in ["ENSURE_SCHEMA_SPACES", "ENSURE_SCHEMA_WALLS", "ENSURE_SCHEMA_LAYERS"]:
+        q = _query_manager.get(query_name)
+        if q:
+            tx.run(q)
     logger.logText("BIM2GRAPH", "Schema constraints created")
 
 
 def upsert_spaces(tx, spaces):
     """Create or update Space nodes in Neo4j"""
-    tx.run(
-        """
-        UNWIND $spaces AS space
-        MERGE (s:Space {id: space.id})
-        SET s.name = space.name,
-            s.longName = space.longName,
-            s.ifcClass = space.ifcClass
-        """,
-        spaces=spaces
-    )
+    q = _query_manager.get("UPSERT_SPACES")
+    if q:
+        tx.run(q, spaces=spaces)
     logger.logText("BIM2GRAPH", f"Upserted {len(spaces)} Space nodes")
 
 
 def upsert_walls(tx, walls):
     """Create or update Wall nodes in Neo4j"""
-    tx.run(
-        """
-        UNWIND $walls AS wall
-        MERGE (w:Wall {id: wall.id})
-        SET w.name = wall.name,
-            w.ifcClass = wall.ifcClass,
-            w.loadBearing = wall.loadBearing,
-            w.isExternal = wall.isExternal
-        """,
-        walls=walls
-    )
+    q = _query_manager.get("UPSERT_WALLS")
+    if q:
+        tx.run(q, walls=walls)
     logger.logText("BIM2GRAPH", f"Upserted {len(walls)} Wall nodes")
 
 
 def upsert_layers(tx, layers):
     """Create or update Layer nodes in Neo4j"""
-    tx.run(
-        """
-        UNWIND $layers AS layer
-        MERGE (l:Layer {id: layer.id})
-        SET l.name = layer.name,
-            l.ifcClass = layer.ifcClass,
-            l.layerIndex = layer.layerIndex,
-            l.thickness = layer.thickness
-        """,
-        layers=layers
-    )
+    q = _query_manager.get("UPSERT_LAYERS")
+    if q:
+        tx.run(q, layers=layers)
     logger.logText("BIM2GRAPH", f"Upserted {len(layers)} Layer nodes")
 
 
 def create_wall_layer_edges(tx, layers):
     """Create relationships between walls and their layers"""
-    tx.run(
-        """
-        UNWIND $layers AS layer
-        MATCH (w:Wall {id: layer.wall_id})
-        MATCH (l:Layer {id: layer.id})
-        MERGE (w)-[:HAS_LAYER]->(l)
-        SET l.layerIndex = layer.layerIndex
-        """,
-        layers=layers
-    )
+    q = _query_manager.get("CREATE_WALL_LAYER_EDGES")
+    if q:
+        tx.run(q, layers=layers)
     logger.logText(
         "BIM2GRAPH", f"Created {len(layers)} Wall-Layer relationships")
 
 
 def create_space_wall_edges(tx, edges):
     """Create space-wall relationships with direction sense"""
-    tx.run(
-        """
-        UNWIND $edges AS edge
-        MATCH (s:Space {id: edge.space_id})
-        MATCH (w:Wall {id: edge.wall_id})
-        MERGE (s)-[r:BOUNDED_BY]->(w)
-        SET r.directionSense = edge.directionSense
-        """,
-        edges=edges
-    )
+    q = _query_manager.get("CREATE_SPACE_WALL_EDGES")
+    if q:
+        tx.run(q, edges=edges)
     logger.logText(
         "BIM2GRAPH", f"Created {len(edges)} Space-Wall relationships with direction sense")
 
 
-def generate_graph(driver, arc_path):
-    """Main function to generate the BIM graph"""
+# ============================================================================
+# Main Graph Generation
+# ============================================================================
 
-    # Load IFC model
+def generate_graph(driver, arc_path):
+    """
+    Generate a BIM-derived graph from an IFC model and persist to Neo4j.
+
+    Args:
+        driver: Neo4j driver instance
+        arc_path: Path to the IFC model file
+    """
+    logger.logText("BIM2GRAPH", f"Loading IFC model from {arc_path}")
     model = ifcopenshell.open(arc_path)
 
-    # Extract data
+    # Extract data from IFC
     spaces = extract_spaces(model)
     walls = extract_walls(model)
     layers = extract_layers(model, walls)
@@ -257,10 +291,15 @@ def generate_graph(driver, arc_path):
     with driver.session() as session:
         session.execute_write(reset_database)
         session.execute_write(ensure_schema)
-        session.execute_write(upsert_spaces, spaces)
-        session.execute_write(upsert_walls, walls)
-        session.execute_write(upsert_layers, layers)
-        session.execute_write(create_wall_layer_edges, layers)
-        session.execute_write(create_space_wall_edges, space_wall_edges)
 
-    logger.logText("BIM2GRAPH", "BIM2GRAPH generation complete")
+        if spaces:
+            session.execute_write(upsert_spaces, spaces)
+        if walls:
+            session.execute_write(upsert_walls, walls)
+        if layers:
+            session.execute_write(upsert_layers, layers)
+            session.execute_write(create_wall_layer_edges, layers)
+        if space_wall_edges:
+            session.execute_write(create_space_wall_edges, space_wall_edges)
+
+    logger.logText("BIM2GRAPH", "Graph generation complete")

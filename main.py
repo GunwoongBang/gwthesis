@@ -30,21 +30,20 @@ if __name__ == "__main__":
     driver = graph_initiate()
 
     try:
-        # region: BIM2GRAPH
+        # ====================================================================
+        # BIM2GRAPH
+        # ====================================================================
 
         # Generate a BIM-derived graph from BIM models
         bim2graph.generate_graph(driver, ARC_PATH)
-        # regionEnd
 
-        # region: SENSOR2GRAPH
-        # regionEnd
+        # ====================================================================
+        # SENSOR2GRAPH
+        # ====================================================================
 
-        # region: GRAPH MERGING
-        # regionEnd
-
-        # region: GRAPH MERGING
-        # regionEnd
-
+        # ====================================================================
+        # GRAPH MERGING
+        # ====================================================================
     finally:
         # Ensure driver is always closed
         driver.close()
